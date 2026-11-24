@@ -17,6 +17,7 @@ SEARCH = {
                 "title": "The Adventures of Sherlock Holmes",
                 "creator": "Sir Arthur Conan Doyle",
                 "language": "eng",
+                "runtime": "10:17:59",
                 "date": "2007-03-10T00:00:00Z",
                 "subject": ["librivox", "audiobook", "Holmes", "mystery"],
             },
@@ -78,13 +79,16 @@ async def test_search_scopes_to_collection_and_parses_docs():
     page = await src.search('sherlock "holmes"')
     q = seen[0].url.params["q"]
     assert q == "collection:librivoxaudio AND (sherlock holmes)"
+    assert "runtime" in seen[0].url.params.get_list("fl[]")
     assert page.total_pages == 3
     holmes, polish = page.items
     assert holmes.url == "https://archive.org/details/adventures_holmes"
     assert holmes.cover_url == "https://archive.org/services/img/adventures_holmes"
     assert (holmes.language, holmes.posted) == ("English", "2007-03-10")
     assert holmes.categories == ["Holmes", "Mystery"]
+    assert holmes.length == "10 hours and 18 minutes"
     assert (polish.author, polish.language) == ("Henryk Sienkiewicz", "Polish")
+    assert not polish.length
 
 
 async def test_categories_and_newest_change_the_query():
@@ -109,6 +113,26 @@ async def test_details_prefers_single_m4b_and_cleans_metadata():
     assert d.length == "10 hours and 18 minutes"
     assert d.description == "Librivox recording.\n\nTwelve stories."
     assert "Holmes" in d.categories and "Librivox" not in d.categories
+
+
+@pytest.mark.parametrize(
+    ("file_length", "runtime", "bitrate"),
+    [("60.0", "02:00", "~64 kbps avg"), ("", "01:00", "~64 kbps avg"), ("", "", "")],
+)
+async def test_bitrate_uses_only_selected_audio(monkeypatch, file_length, runtime, bitrate):
+    monkeypatch.setitem(
+        METADATA,
+        "files",
+        [
+            {"name": "book.m4b", "format": "Audiobook", "size": "480000", "length": file_length},
+            {"name": "alternate.mp3", "format": "VBR MP3", "size": "900000"},
+            {"name": "cover.jpg", "format": "JPEG", "size": "50000"},
+        ],
+    )
+    monkeypatch.setitem(METADATA["metadata"], "runtime", runtime)
+    d = await archive.librivox(client=ia_client()).details("https://archive.org/details/book")
+    assert d.size == "469 KB"
+    assert d.bitrate == bitrate
 
 
 def test_pick_files_falls_back_to_mp3_set():
@@ -186,6 +210,7 @@ def test_api_lists_sources_and_adds_free_books(monkeypatch):
             "items"
         ]
         assert items[0]["source"] == "librivox"
+        assert items[0]["length"] == "10 hours and 18 minutes"
 
         book = c.post("/api/library", json={"url": items[0]["url"], "source": "librivox"}).json()
         assert book["source"] == "librivox"
