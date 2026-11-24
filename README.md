@@ -38,7 +38,7 @@ Browse more than 30,000 free, legal audiobooks and radio shows from **LibriVox**
 <td width="50%" valign="top">
 
 ### Search that forgives typos
-Search for `sherlok holms` and you still get Sherlock Holmes. Titles suggest themselves as you type, results are ranked by how well they match, and there's always a way back to your exact words.
+Search for `sherlok holms` and you still get Sherlock Holmes. Titles suggest themselves as you type, results are ranked by how well they match, and there's always a way back to your exact words. Use the Grid and List icons beside the results heading to switch layouts. List view shows full titles, and your browser remembers your choice.
 
 </td>
 </tr>

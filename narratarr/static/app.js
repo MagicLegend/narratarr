@@ -92,6 +92,7 @@ const state = {
     source: lastSource(),
     kind: lastKind(),
   },
+  searchView: lastSearchView(),
   libFilter: "all",
   libFormat: "",
   libSearch: "",
@@ -229,6 +230,14 @@ function lastSource() {
     );
   } catch {
     return "librivox";
+  }
+}
+
+function lastSearchView() {
+  try {
+    return localStorage.getItem("narratarr.searchView") === "list" ? "list" : "grid";
+  } catch {
+    return "grid";
   }
 }
 const FALLBACK_SOURCES = {
@@ -809,7 +818,23 @@ function Discover(root) {
     }
     <div id="spotlight"></div>
     <div id="follow-shelf"></div>
-    <div class="section-head"><h2 id="disc-title"></h2><div class="refine" id="refine"></div></div>
+    <div class="section-head">
+      <div class="results-heading">
+        <h2 id="disc-title"></h2>
+        <div class="segmented results-view" role="group" aria-label="Search results layout" hidden>
+          ${[
+            ["grid", I.grid, "Grid view"],
+            ["list", I.list, "List view"],
+          ]
+            .map(
+              ([view, icon, label]) => `
+            <button type="button" data-results-view="${view}" aria-label="${label}" title="${label}" aria-controls="grid" aria-pressed="${state.searchView === view}">${icon}</button>`,
+            )
+            .join("")}
+        </div>
+      </div>
+      <div class="refine" id="refine"></div>
+    </div>
     <div class="chips" id="chips">
       <button class="chip ${!d.q && !d.category ? "on" : ""}" data-cat="">${esc(defaultLabel)}</button>
       ${src.categories.map((c) => `<button class="chip ${!d.q && d.category === c.slug ? "on" : ""}" data-cat="${esc(c.slug)}">${esc(c.name)}</button>`).join("")}
@@ -822,6 +847,27 @@ function Discover(root) {
 
   const grid = $("#grid", root);
   const sentinel = $("#sentinel", root);
+  const viewPicker = $(".results-view", root);
+
+  function applyResultsView() {
+    viewPicker.hidden = !d.q;
+    grid.classList.toggle("results-list", Boolean(d.q) && state.searchView === "list");
+    $$("[data-results-view]", viewPicker).forEach((button) => {
+      button.setAttribute("aria-pressed", String(button.dataset.resultsView === state.searchView));
+    });
+  }
+
+  viewPicker.onclick = (e) => {
+    const button = e.target.closest("[data-results-view]");
+    if (!button || button.dataset.resultsView === state.searchView) return;
+    state.searchView = button.dataset.resultsView;
+    try {
+      localStorage.setItem("narratarr.searchView", state.searchView);
+    } catch {
+      /* private mode */
+    }
+    applyResultsView();
+  };
 
   function heading() {
     const cat = src.categories.find((c) => c.slug === d.category);
@@ -832,6 +878,7 @@ function Discover(root) {
       (d.dym
         ? `<p class="dym">Including results for <em>${esc(d.dym)}</em> · <button data-literal>Show only close matches for “${esc(d.q)}”</button></p>`
         : "") + (d.storeNote ? `<p class="dym">${esc(d.storeNote)}</p>` : "");
+    applyResultsView();
     refine();
   }
 
