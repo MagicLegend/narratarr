@@ -28,6 +28,7 @@ class Listing:
     protocol: str = ""
     seeders: int | None = None
     release: str = ""
+    length: str = field(default="", kw_only=True)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -51,7 +52,6 @@ class Page:
 class Details(Listing):
     narrators: list[str] = field(default_factory=list)
     description: str = ""
-    length: str = ""
     info_hash: str = ""
     trackers: list[str] = field(default_factory=list)
     files: list[dict] = field(default_factory=list)  # direct downloads: {url, name, size}

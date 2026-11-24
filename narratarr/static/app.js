@@ -92,6 +92,7 @@ const state = {
     source: lastSource(),
     kind: lastKind(),
   },
+  searchView: lastSearchView(),
   libFilter: "all",
   libFormat: "",
   libSearch: "",
@@ -229,6 +230,14 @@ function lastSource() {
     );
   } catch {
     return "librivox";
+  }
+}
+
+function lastSearchView() {
+  try {
+    return localStorage.getItem("narratarr.searchView") === "list" ? "list" : "grid";
+  } catch {
+    return "grid";
   }
 }
 const FALLBACK_SOURCES = {
@@ -476,6 +485,11 @@ function route() {
 
 function cardHTML(item, lib, i = 0) {
   const h = hue(item.title + item.author);
+  const archive = isArchiveAudio(item.source);
+  const enrich =
+    archive ||
+    (item.source === "audiobookbay" &&
+      [item.language, item.format, item.length, item.size, item.bitrate].some((value) => !value));
   const facts = [
     item.format,
     item.size,
@@ -492,6 +506,16 @@ function cardHTML(item, lib, i = 0) {
         : "",
     item.source === "audible" ? releaseLabel(item.released || item.posted) : "",
   ].filter(Boolean);
+  const listFacts = [
+    item.language === "English" ? item.language : "",
+    !archive && item.source !== "audible" ? shortLength(item.length) : "",
+    item.bitrate,
+    item.indexer && item.author ? `via ${item.indexer}` : "",
+    item.narrators?.length ? `Narrated by ${item.narrators.join(", ")}` : "",
+    item.series?.length
+      ? item.series.map((s) => `${s.title}${s.sequence ? ` #${s.sequence}` : ""}`).join(", ")
+      : "",
+  ].filter(Boolean);
   const active = lib && ACTIVE.includes(lib.status);
   return `
     <article class="card" tabindex="0" data-url="${esc(item.url)}" ${lib ? `data-id="${lib.id}"` : ""} style="--glow:hsl(${h} 80% 55%);animation-delay:${Math.min(i, 12) * 35}ms">
@@ -504,7 +528,11 @@ function cardHTML(item, lib, i = 0) {
       <div class="meta">
         <div class="title">${esc(item.title)}</div>
         <div class="author">${esc(item.author || (item.indexer ? `via ${item.indexer}` : "Unknown author"))}</div>
-        ${facts.length ? `<div class="facts">${facts.map((f) => `<span>${esc(f)}</span>`).join("")}</div>` : ""}
+        ${
+          facts.length || listFacts.length || enrich
+            ? `<div class="facts${facts.length ? "" : " list-fact"}">${facts.map((f) => `<span>${esc(f)}</span>`).join("")}${listFacts.map((f) => `<span class="list-fact">${esc(f)}</span>`).join("")}${enrich ? `<span class="list-fact" data-list-details data-language="${esc(item.language || "")}" data-format="${esc(item.format || "")}" data-size="${esc(item.size || "")}" data-bitrate="${esc(item.bitrate || "")}" data-length="${esc(shortLength(item.length))}">${archive ? esc(shortLength(item.length)) : ""}</span>` : ""}</div>`
+            : ""
+        }
         ${ratingPillHTML(item)}
         ${clientChip(item)}
       </div>
@@ -549,6 +577,8 @@ const shortLength = (len) =>
     .replace(/ hours?/, "h")
     .replace(/ and /, " ")
     .replace(/ minutes?/, "m");
+
+const isArchiveAudio = (source) => source === "librivox" || source === "oldtimeradio";
 
 function releaseLabel(day, always = false) {
   const t = Date.parse(day || "");
@@ -809,7 +839,23 @@ function Discover(root) {
     }
     <div id="spotlight"></div>
     <div id="follow-shelf"></div>
-    <div class="section-head"><h2 id="disc-title"></h2><div class="refine" id="refine"></div></div>
+    <div class="section-head">
+      <h2 id="disc-title"></h2>
+      <div class="results-controls">
+        <div class="refine" id="refine"></div>
+        <div class="segmented results-view" role="group" aria-label="Search results layout" hidden>
+          ${[
+            ["grid", I.grid, "Grid view"],
+            ["list", I.list, "List view"],
+          ]
+            .map(
+              ([view, icon, label]) => `
+            <button type="button" data-results-view="${view}" aria-label="${label}" title="${label}" aria-controls="grid" aria-pressed="${state.searchView === view}">${icon}</button>`,
+            )
+            .join("")}
+        </div>
+      </div>
+    </div>
     <div class="chips" id="chips">
       <button class="chip ${!d.q && !d.category ? "on" : ""}" data-cat="">${esc(defaultLabel)}</button>
       ${src.categories.map((c) => `<button class="chip ${!d.q && d.category === c.slug ? "on" : ""}" data-cat="${esc(c.slug)}">${esc(c.name)}</button>`).join("")}
@@ -822,6 +868,75 @@ function Discover(root) {
 
   const grid = $("#grid", root);
   const sentinel = $("#sentinel", root);
+  const viewPicker = $(".results-view", root);
+  const listDetails = new Map();
+  const listRequests = new AbortController();
+  let listPending = 0;
+
+  function loadListDetails() {
+    if (
+      !(isArchiveAudio(src.name) || src.name === "audiobookbay") ||
+      !grid.classList.contains("results-list") ||
+      listRequests.signal.aborted
+    )
+      return;
+    for (const slot of $$("[data-list-details]", grid)) {
+      const { url } = slot.closest(".card").dataset;
+      if (listDetails.has(url)) {
+        const details = listDetails.get(url);
+        if (details) {
+          slot.textContent = [
+            !slot.dataset.language && details.language,
+            !slot.dataset.format && details.format,
+            shortLength(details.length) || slot.dataset.length,
+            !slot.dataset.size && details.size,
+            !slot.dataset.bitrate && details.bitrate,
+            details.narrators?.length && `Narrated by ${details.narrators.join(", ")}`,
+          ]
+            .filter(Boolean)
+            .join(" · ");
+        } else if (details === false) {
+          slot.textContent = [slot.dataset.length, "More details unavailable"]
+            .filter(Boolean)
+            .join(" · ");
+        }
+      } else if (listPending < 4) {
+        listDetails.set(url, null);
+        listPending++;
+        const params = new URLSearchParams({ url, source: src.name });
+        api(`/api/details?${params}`, { signal: listRequests.signal })
+          .then((details) => listDetails.set(url, details))
+          .catch(() => {
+            if (!listRequests.signal.aborted) listDetails.set(url, false);
+          })
+          .finally(() => {
+            listPending--;
+            loadListDetails();
+          });
+      }
+    }
+  }
+
+  function applyResultsView() {
+    viewPicker.hidden = !d.q;
+    grid.classList.toggle("results-list", Boolean(d.q) && state.searchView === "list");
+    $$("[data-results-view]", viewPicker).forEach((button) => {
+      button.setAttribute("aria-pressed", String(button.dataset.resultsView === state.searchView));
+    });
+    loadListDetails();
+  }
+
+  viewPicker.onclick = (e) => {
+    const button = e.target.closest("[data-results-view]");
+    if (!button || button.dataset.resultsView === state.searchView) return;
+    state.searchView = button.dataset.resultsView;
+    try {
+      localStorage.setItem("narratarr.searchView", state.searchView);
+    } catch {
+      /* private mode */
+    }
+    applyResultsView();
+  };
 
   function heading() {
     const cat = src.categories.find((c) => c.slug === d.category);
@@ -832,6 +947,7 @@ function Discover(root) {
       (d.dym
         ? `<p class="dym">Including results for <em>${esc(d.dym)}</em> · <button data-literal>Show only close matches for “${esc(d.q)}”</button></p>`
         : "") + (d.storeNote ? `<p class="dym">${esc(d.storeNote)}</p>` : "");
+    applyResultsView();
     refine();
   }
 
@@ -938,6 +1054,7 @@ function Discover(root) {
         ? `<p class="dym">Showing every language · <button data-all-langs>Only mine</button></p>`
         : "";
     grid.innerHTML = items.map((it, i) => cardHTML(it, libFor(lib, it.url), i)).join("");
+    loadListDetails();
     if (!items.length && !d.loading) {
       const filtered = d.items.length > 0;
       grid.innerHTML = `<div class="empty" style="grid-column:1/-1">
@@ -1284,6 +1401,7 @@ function Discover(root) {
       });
     },
     destroy() {
+      listRequests.abort();
       io.disconnect();
       document.removeEventListener("click", outsideScope);
     },

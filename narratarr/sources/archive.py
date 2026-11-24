@@ -23,7 +23,7 @@ SEARCH = "https://archive.org/advancedsearch.php"
 METADATA = "https://archive.org/metadata/{id}"
 ROWS = 24
 CACHE_SECONDS = 300
-FIELDS = ["identifier", "title", "creator", "date", "language", "subject"]
+FIELDS = ["identifier", "title", "creator", "date", "language", "subject", "runtime"]
 
 # Which files to download, best first. LibriVox's "Audiobook" format is a single
 # .m4b with chapter markers, which suits the player perfectly.
@@ -96,15 +96,18 @@ def _fmt_size(n: int) -> str:
         n /= 1024
 
 
-def _runtime(v: str) -> str:
-    """'10:17:59' -> '10 hours and 18 minutes'."""
-    parts = [int(p) for p in re.findall(r"\d+", v or "")]
-    if len(parts) == 3:
-        h, m = parts[0], parts[1] + (1 if parts[2] >= 30 else 0)
-    elif len(parts) == 2:
-        h, m = 0, parts[0]
-    else:
+def _runtime_seconds(value: str) -> float:
+    if not re.fullmatch(r"(?:\d+:){0,2}\d+(?:\.\d+)?", value.strip()):
+        return 0
+    return sum(float(part) * 60**i for i, part in enumerate(reversed(value.split(":"))))
+
+
+def _runtime(seconds: float) -> str:
+    if not seconds:
         return ""
+    h, m = divmod(int((seconds + 30) // 60), 60)
+    if not h and not m:
+        return f"{int(seconds)} seconds"
     return f"{h} hours and {m} minutes" if h else f"{m} minutes"
 
 
@@ -199,7 +202,19 @@ class ArchiveSource:
         meta = data.get("metadata") or {}
         if not meta:
             raise ValueError("That item isn't available on the Internet Archive.")
-        files, fmt = pick_files(identifier, data.get("files") or [])
+        raw_files = data.get("files") or []
+        files, fmt = pick_files(identifier, raw_files)
+        durations = {f.get("name"): _runtime_seconds(_first(f.get("length"))) for f in raw_files}
+        selected_durations = [durations[f["name"]] for f in files]
+        seconds = (
+            sum(selected_durations)
+            if selected_durations and all(selected_durations)
+            else _runtime_seconds(_first(meta.get("runtime")))
+        )
+        audio_bytes = (
+            sum(f["size"] for f in files) if files and all(f["size"] > 0 for f in files) else 0
+        )
+        kbps = round(audio_bytes * 8 / (seconds * 1000)) if audio_bytes and seconds else 0
         return Details(
             url=f"https://archive.org/details/{identifier}",
             title=_first(meta.get("title")) or identifier,
@@ -208,10 +223,11 @@ class ArchiveSource:
             language=_language(meta.get("language")),
             categories=_subjects(meta.get("subject")),
             format=fmt,
-            size=_fmt_size(sum(f["size"] for f in files)) if files else "",
+            size=_fmt_size(audio_bytes) if audio_bytes else "",
+            bitrate=f"~{kbps} kbps avg" if kbps else "",
             posted=_first(meta.get("date"))[:10],
             description=_plain(_first(meta.get("description"))),
-            length=_runtime(_first(meta.get("runtime"))),
+            length=_runtime(seconds),
             files=files,
         )
 
@@ -255,6 +271,7 @@ class ArchiveSource:
                     language=_language(doc.get("language")),
                     categories=_subjects(doc.get("subject")),
                     posted=_first(doc.get("date"))[:10],
+                    length=_runtime(_runtime_seconds(_first(doc.get("runtime")))),
                 )
             )
         total = max(1, -(-int(resp.get("numFound") or 0) // ROWS))
